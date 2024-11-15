@@ -1,0 +1,62 @@
+#!/usr/bin/env ruby
+
+require "bundler/inline"
+
+gemfile do
+  source "https://rubygems.org"
+  gem "csv"
+  gem "thor"
+end
+
+class SicrediYnab < Thor
+  desc "converter INPUT_FILE OUTPUT_FILE", "Lê um arquivo CSV de cartão do Sicredi e exporta para YNAB"
+  def converter(input_file, output_file)
+    unless File.exist?(input_file)
+      puts "File not found: #{input_file}"
+      exit(1)
+    end
+
+    columns = [:data, :descricao, :parcela, :valor, :valor_dolar, :adicional, :nome].freeze
+
+    # Flag for ignoring the preface of the CSV file, such as
+    #
+    # ```csv
+    # ﻿ Associado ;Joao da Silva;;;;
+    #  Cooperativa ;2602;;;;
+    #  Conta Corrente ;12345-6;;;;
+    #
+    #  Cartão Mastercard Black;;;;;
+    # ```
+    #
+    # ... until we find a row with " Data " in the first column
+    preface = true
+
+    # "Date","Payee","Memo","Amount"
+    # "2016-01-01","Grocery Store","Import Memo","$13.37"
+
+    CSV.open(output_file, "w", col_sep: ",", write_headers: true, headers: ["Date", "Payee", "Memo", "Amount"]) do |output|
+      CSV.foreach(input_file, col_sep: ";", headers: columns) do |row|
+        if preface
+          preface = false if row[0].to_s.strip == "Data"
+
+          next
+        end
+
+        next if !row[:data] || row[:data] == ""
+
+        output << [
+          row[:data]&.strip&.then { |date| Date.strptime(date, "%d/%m/%Y") },
+          row[:descricao]&.strip,
+          [
+            row[:valor_dolar]&.strip,
+            row[:parcela]&.strip,
+            row[:adicional]&.strip&.then { |name| "Cartão #{name} (#{row[:nome]})" },
+          ].compact.join(", "),
+          row[:valor]&.strip&.gsub("R$ ", "")&.gsub(".", "")&.gsub(",", ".")&.to_f&.then { |v| v * -1 }
+        ]
+      end
+    end
+  end
+end
+
+SicrediYnab.start(ARGV)
